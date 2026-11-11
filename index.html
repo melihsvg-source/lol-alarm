@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-  <title>Master Yi Radar v6</title>
+  <title>Master Yi Radar (Hızlı Yükleme)</title>
   <style>
     * { box-sizing: border-box; }
     body {
@@ -61,6 +61,11 @@
       color: white;
       cursor: pointer;
     }
+    button:disabled {
+      background: #475569 !important;
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
     .btn-cam { background: #2563eb; }
     .btn-capture { background: #d97706; }
     .slider-box {
@@ -95,15 +100,14 @@
       object-fit: cover;
     }
   </style>
-  <script async src="https://docs.opencv.org/4.8.0/opencv.js" onload="initOpenCv();"></script>
 </head>
 <body>
 
-  <h3>Master Yi Radar (Manuel Eşik Kontrolü)</h3>
+  <h3>Master Yi Radar (Hızlı Başlatma)</h3>
 
   <div class="hud">
-    <span id="sysStatus">OpenCV Yükleniyor...</span>
-    <span class="score-box">Anlık Benzerlik: <span id="currentScore">%0.0</span></span>
+    <span id="sysStatus">Hafıza Kontrol Ediliyor...</span>
+    <span class="score-box">Anlık: <span id="currentScore">%0.0</span></span>
   </div>
 
   <div class="stage">
@@ -126,7 +130,74 @@
   </div>
 
   <script>
-    let cvReady = false;
+    const OPENCV_URL = "https://cdnjs.cloudflare.com/ajax/libs/opencv.js/4.8.0/opencv.js";
+    const DB_NAME = "OpenCV_Storage";
+    const STORE_NAME = "scripts";
+
+    const sysStatus = document.getElementById('sysStatus');
+    const btnCam = document.getElementById('btnCam');
+
+    // 1. IndexedDB ile telefona kalıcı kaydetme motoru
+    function getDb() {
+      return new Promise((resolve, reject) => {
+        const req = indexedDB.open(DB_NAME, 1);
+        req.onupgradeneeded = () => req.result.createObjectStore(STORE_NAME);
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+    }
+
+    async function loadOpenCvFast() {
+      try {
+        const db = await getDb();
+        const tx = db.transaction(STORE_NAME, "readonly");
+        const store = tx.objectStore(STORE_NAME);
+        const getReq = store.get("opencv_js");
+
+        getReq.onsuccess = async () => {
+          let code = getReq.result;
+          if (code) {
+            sysStatus.innerText = "Hafızadan yükleniyor...";
+            injectScript(code);
+          } else {
+            sysStatus.innerText = "İndiriliyor (Tek Seferlik)...";
+            const res = await fetch(OPENCV_URL);
+            code = await res.text();
+            
+            // Telefona yaz
+            const writeTx = db.transaction(STORE_NAME, "readwrite");
+            writeTx.objectStore(STORE_NAME).put(code, "opencv_js");
+            injectScript(code);
+          }
+        };
+      } catch (e) {
+        // Fallback: Standart script enjekte et
+        const s = document.createElement('script');
+        s.src = OPENCV_URL;
+        s.onload = checkReadyLoop;
+        document.head.appendChild(s);
+      }
+    }
+
+    function injectScript(code) {
+      const s = document.createElement('script');
+      s.text = code;
+      document.head.appendChild(s);
+      checkReadyLoop();
+    }
+
+    function checkReadyLoop() {
+      if (typeof cv !== 'undefined' && cv.Mat) {
+        sysStatus.innerText = "Sistem Hazır";
+        btnCam.disabled = false;
+      } else {
+        setTimeout(checkReadyLoop, 150);
+      }
+    }
+
+    loadOpenCvFast();
+
+    // --- Oyun Algılama ve Takip Motoru ---
     let baseTemplate = null;
     let scaledTemplates = [];
     let isTracking = false;
@@ -136,29 +207,18 @@
     const overlay = document.getElementById('overlayCanvas');
     const cropCanvas = document.getElementById('cropCanvas');
     const preview = document.getElementById('templatePreview');
-    const sysStatus = document.getElementById('sysStatus');
     const scoreLabel = document.getElementById('currentScore');
     const threshSlider = document.getElementById('threshold');
     const threshNum = document.getElementById('thresholdNum');
 
-    // Slider değişince kutuyu güncelle
     threshSlider.oninput = () => {
       threshNum.value = parseFloat(threshSlider.value).toFixed(1);
     };
 
-    // Kutudan elle yazılınca slider'ı güncelle
     threshNum.oninput = () => {
       let val = parseFloat(threshNum.value);
-      if (!isNaN(val)) {
-        threshSlider.value = val;
-      }
+      if (!isNaN(val)) threshSlider.value = val;
     };
-
-    function initOpenCv() {
-      cvReady = true;
-      sysStatus.innerText = "Sistem Hazır";
-      document.getElementById('btnCam').disabled = false;
-    }
 
     async function startCam() {
       try {
@@ -175,7 +235,7 @@
           requestAnimationFrame(renderLoop);
         };
       } catch (e) {
-        alert("Kamera hatası: " + e.message);
+        alert("Kamera izni hatası: " + e.message);
       }
     }
 
@@ -191,6 +251,4 @@
       const sx = Math.floor((vw - boxSize) / 2);
       const sy = Math.floor((vh - boxSize) / 2);
 
-      cropCanvas.width = boxSize;
-      cropCanvas.height = boxSize;
-      const ctx
+      crop
