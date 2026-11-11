@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-  <title>LoL Minimap Dedektörü v3</title>
+  <title>Master Yi Minimap Dedektörü</title>
   <style>
     * { box-sizing: border-box; }
     body {
@@ -14,7 +14,7 @@
       font-family: -apple-system, BlinkMacSystemFont, sans-serif;
       text-align: center;
     }
-    h3 { margin: 6px 0; font-size: 1rem; }
+    h3 { margin: 6px 0; font-size: 1rem; color: #fbbf24; }
     .stage {
       position: relative;
       display: inline-block;
@@ -62,7 +62,7 @@
       cursor: pointer;
     }
     .btn-cam { background: #2563eb; }
-    .btn-capture { background: #e11d48; }
+    .btn-capture { background: #d97706; }
     .slider-box {
       background: #1e293b;
       padding: 10px;
@@ -74,9 +74,9 @@
     }
     input[type="range"] { flex: 1; }
     #templatePreview {
-      width: 44px;
-      height: 44px;
-      border: 2px solid #38bdf8;
+      width: 48px;
+      height: 48px;
+      border: 2px solid #fbbf24;
       border-radius: 50%;
       margin: 6px auto;
       display: none;
@@ -88,11 +88,11 @@
 </head>
 <body>
 
-  <h3>LoL Radar v3 (Görsel Sabitleyici)</h3>
+  <h3>Master Yi Radar (Maskeli Takip)</h3>
 
   <div class="hud">
     <span id="sysStatus">OpenCV Yükleniyor...</span>
-    <span class="score-box">Mevcut Benzerlik: <span id="currentScore">%0</span></span>
+    <span class="score-box">Eşleşme: <span id="currentScore">%0</span></span>
   </div>
 
   <div class="stage">
@@ -101,22 +101,24 @@
   </div>
 
   <canvas id="cropCanvas" style="display:none;"></canvas>
-  <img id="templatePreview" alt="Hedef İkon">
+  <img id="templatePreview" alt="Yi İkonu">
 
   <div class="actions">
     <button class="btn-cam" id="btnCam" disabled onclick="startCam()">1. Kamerayı Başlat</button>
-    <button class="btn-capture" id="btnCap" disabled onclick="captureTargetFromScreen()">2. Ortadaki Karakteri Hedef Olarak Al</button>
+    <button class="btn-capture" id="btnCap" disabled onclick="captureYi()">2. Ortadaki Yi'yi Kilitle (Daire)</button>
 
     <div class="slider-box">
       <span>Tetikleme Eşiği:</span>
-      <input type="range" id="threshold" min="0.50" max="0.85" step="0.02" value="0.62">
-      <span id="threshLabel">%62</span>
+      <input type="range" id="threshold" min="0.55" max="0.85" step="0.02" value="0.65">
+      <span id="threshLabel">%65</span>
     </div>
   </div>
 
   <script>
     let cvReady = false;
-    let templateEdges = null;
+    let baseTemplate = null;
+    let baseMask = null;
+    let scaledTemplates = [];
     let isTracking = false;
     let lastAlert = 0;
 
@@ -154,15 +156,23 @@
           requestAnimationFrame(renderLoop);
         };
       } catch (e) {
-        alert("Kamera izni hatası: " + e.message);
+        alert("Kamera hatası: " + e.message);
       }
     }
 
-    // Ortadaki kılavuzdan şampiyonu tam kamera çözünürlüğünde kırpıp şablon yapar
-    function captureTargetFromScreen() {
+    function clearTemplates() {
+      scaledTemplates.forEach(item => {
+        item.tpl.delete();
+        item.msk.delete();
+      });
+      scaledTemplates = [];
+    }
+
+    // Yi'yi çekerken dışındaki köşeleri tamamen silip sadece yuvarlak daireyi maske yapıyoruz
+    function captureYi() {
       const vw = video.videoWidth;
       const vh = video.videoHeight;
-      const boxSize = 54; // Minimap şampiyon ikonu boyutu
+      const boxSize = 52; // Yi'nin minimap portre çapı
       const sx = Math.floor((vw - boxSize) / 2);
       const sy = Math.floor((vh - boxSize) / 2);
 
@@ -174,21 +184,33 @@
       preview.src = cropCanvas.toDataURL();
       preview.style.display = "block";
 
-      if (templateEdges) templateEdges.delete();
+      if (baseTemplate) baseTemplate.delete();
+      if (baseMask) baseMask.delete();
+      clearTemplates();
 
       let src = cv.imread(cropCanvas);
-      let gray = new cv.Mat();
-      cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+      baseTemplate = new cv.Mat();
+      cv.cvtColor(src, baseTemplate, cv.COLOR_RGBA2GRAY);
 
-      // Canny Edge ile parlama ve renk farklarını sıfırlıyoruz
-      templateEdges = new cv.Mat();
-      cv.Canny(gray, templateEdges, 50, 150);
+      // Zemin yeşilliğini/nehir dokusunu yoksaymak için yuvarlak maske oluştur
+      baseMask = new cv.Mat.zeros(boxSize, boxSize, cv.CV_8UC1);
+      let center = new cv.Point(boxSize / 2, boxSize / 2);
+      cv.circle(baseMask, center, Math.floor(boxSize / 2) - 2, new cv.Scalar(255), -1);
+
+      // Farklı mesafeler için 3 ölçek hazırla
+      const scales = [0.90, 1.0, 1.10];
+      scales.forEach(s => {
+        let tpl = new cv.Mat();
+        let msk = new cv.Mat();
+        let dsize = new cv.Size(Math.round(boxSize * s), Math.round(boxSize * s));
+        cv.resize(baseTemplate, tpl, dsize, 0, 0, cv.INTER_LINEAR);
+        cv.resize(baseMask, msk, dsize, 0, 0, cv.INTER_NEAREST);
+        scaledTemplates.push({ tpl, msk, w: dsize.width, h: dsize.height });
+      });
 
       src.delete();
-      gray.delete();
-
       isTracking = true;
-      sysStatus.innerText = "Hedef Kilitlendi! Taranıyor...";
+      sysStatus.innerText = "Yi Kilitlendi! Taranıyor...";
     }
 
     function renderLoop() {
@@ -198,17 +220,18 @@
         const ctx = overlay.getContext('2d');
         ctx.clearRect(0, 0, vw, vh);
 
-        // 1. Ekranın tam ortasındaki Kırpma / Nişan dairesi
-        const centerSize = 54;
-        const cx = (vw - centerSize) / 2;
-        const cy = (vh - centerSize) / 2;
+        // Ortadaki hedef dairesi
+        const centerSize = 52;
+        const cx = vw / 2;
+        const cy = vh / 2;
 
-        ctx.strokeStyle = "#38bdf8";
+        ctx.strokeStyle = "#fbbf24";
         ctx.lineWidth = 2;
-        ctx.strokeRect(cx, cy, centerSize, centerSize);
+        ctx.beginPath();
+        ctx.arc(cx, cy, centerSize / 2, 0, 2 * Math.PI);
+        ctx.stroke();
 
-        // 2. Eğer hedef tanımlandıysa tüm ekranda Canny Edge ile ara
-        if (isTracking && templateEdges) {
+        if (isTracking && scaledTemplates.length > 0) {
           cropCanvas.width = vw;
           cropCanvas.height = vh;
           const cCtx = cropCanvas.getContext('2d', { willReadFrequently: true });
@@ -218,52 +241,60 @@
           let grayFrame = new cv.Mat();
           cv.cvtColor(frame, grayFrame, cv.COLOR_RGBA2GRAY);
 
-          let frameEdges = new cv.Mat();
-          cv.Canny(grayFrame, frameEdges, 50, 150);
+          let bestVal = 0;
+          let bestLoc = null;
+          let bestSize = null;
 
-          let result = new cv.Mat();
-          cv.matchTemplate(frameEdges, templateEdges, result, cv.TM_CCOEFF_NORMED);
+          // Maskeli eşleme döngüsü (Arka plan dokusunu sıfırlayarak sadece yüzü arar)
+          for (let item of scaledTemplates) {
+            if (grayFrame.cols >= item.w && grayFrame.rows >= item.h) {
+              let result = new cv.Mat();
+              // cv.TM_CCORR_NORMED maske desteği olan en stabil metriktir
+              cv.matchTemplate(grayFrame, item.tpl, result, cv.TM_CCORR_NORMED, item.msk);
+              let minMax = cv.minMaxLoc(result);
+              if (minMax.maxVal > bestVal) {
+                bestVal = minMax.maxVal;
+                bestLoc = minMax.maxLoc;
+                bestSize = { w: item.w, h: item.h };
+              }
+              result.delete();
+            }
+          }
 
-          let minMax = cv.minMaxLoc(result);
-          let matchScore = minMax.maxVal > 0 ? minMax.maxVal : 0;
-          scoreLabel.innerText = `%${Math.round(matchScore * 100)}`;
-
+          scoreLabel.innerText = `%${Math.round(bestVal * 100)}`;
           const threshold = parseFloat(threshSlider.value);
 
-          // Eşik aşıldıysa yeşil kutu çiz ve alarm çal
-          if (matchScore >= threshold) {
-            ctx.strokeStyle = "#22c55e";
+          // Eşik aşıldığında Yi'nin etrafını sarı kareye al ve ötmeye başla
+          if (bestVal >= threshold && bestLoc) {
+            ctx.strokeStyle = "#ef4444";
             ctx.lineWidth = 4;
-            ctx.strokeRect(minMax.maxLoc.x, minMax.maxLoc.y, templateEdges.cols, templateEdges.rows);
+            ctx.strokeRect(bestLoc.x, bestLoc.y, bestSize.w, bestSize.h);
 
             const now = Date.now();
-            if (now - lastAlert > 3500) {
-              soundEmergencyAlarm();
+            if (now - lastAlert > 3000) {
+              playAlert();
               lastAlert = now;
             }
           }
 
           frame.delete();
           grayFrame.delete();
-          frameEdges.delete();
-          result.delete();
         }
       }
-      setTimeout(() => requestAnimationFrame(renderLoop), 70);
+      setTimeout(() => requestAnimationFrame(renderLoop), 80);
     }
 
-    // 2 saniyelik net alarm
-    function soundEmergencyAlarm() {
+    function playAlert() {
       const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-      const beeps = [0, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5];
+      const beeps = [0, 0.22, 0.44, 0.66, 0.88, 1.1, 1.32];
 
       beeps.forEach(t => {
         const osc = audioCtx.createOscillator();
         const gain = audioCtx.createGain();
         osc.type = "sawtooth";
-        osc.frequency.setValueAtTime(950, audioCtx.currentTime + t);
+        osc.frequency.setValueAtTime(1150, audioCtx.currentTime + t);
 
-        gain.gain.setValueAtTime(0.7, audioCtx.currentTime + t);
+        gain.gain.setValueAtTime(0.8, audioCtx.currentTime + t);
         gain.gain.setValueAtTime(0.01, audioCtx.currentTime + t + 0.12);
 
         osc.connect(gain);
