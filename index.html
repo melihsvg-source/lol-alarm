@@ -3,289 +3,275 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-  <title>LoL Minimap Dedektörü</title>
+  <title>LoL Minimap Dedektörü v3</title>
   <style>
     * { box-sizing: border-box; }
     body {
       margin: 0;
-      padding: 12px;
-      background: #0f172a;
-      color: #f8fafc;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      padding: 10px;
+      background: #090d16;
+      color: #f1f5f9;
+      font-family: -apple-system, BlinkMacSystemFont, sans-serif;
       text-align: center;
     }
-    h2 { margin: 8px 0; font-size: 1.1rem; }
-    .video-container {
+    h3 { margin: 6px 0; font-size: 1rem; }
+    .stage {
       position: relative;
       display: inline-block;
       width: 100%;
-      max-width: 420px;
-      border-radius: 12px;
-      overflow: hidden;
+      max-width: 380px;
       background: #000;
+      border-radius: 10px;
+      overflow: hidden;
     }
     video { width: 100%; display: block; }
-    .target-box {
+    canvas#overlayCanvas {
       position: absolute;
-      top: 50%;
-      left: 50%;
-      transform: translate(-50%, -50%);
-      width: 190px;
-      height: 190px;
-      border: 3px dashed #ef4444;
-      border-radius: 8px;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
       pointer-events: none;
     }
-    .status-badge {
-      display: inline-block;
-      margin: 10px 0;
-      padding: 6px 14px;
-      border-radius: 20px;
+    .hud {
+      display: flex;
+      justify-content: space-around;
+      background: #1e293b;
+      padding: 8px;
+      border-radius: 8px;
+      margin: 8px auto;
+      max-width: 380px;
       font-size: 0.85rem;
-      font-weight: 600;
-      background: #334155;
+      font-weight: bold;
     }
-    .status-alert {
-      background: #dc2626 !important;
-      animation: pulse 0.25s infinite alternate;
-    }
-    @keyframes pulse {
-      from { transform: scale(1); }
-      to { transform: scale(1.08); }
-    }
-    .controls {
+    .score-box { color: #38bdf8; }
+    .actions {
       display: flex;
       flex-direction: column;
-      gap: 10px;
-      max-width: 420px;
-      margin: 10px auto;
+      gap: 8px;
+      max-width: 380px;
+      margin: 0 auto;
     }
-    button, label.file-btn {
-      background: #2563eb;
-      color: white;
-      border: none;
+    button {
       padding: 12px;
-      font-size: 0.95rem;
+      border: none;
       border-radius: 8px;
       font-weight: bold;
+      font-size: 0.9rem;
+      color: white;
       cursor: pointer;
     }
-    label.file-btn { background: #059669; display: block; }
-    input[type="file"] { display: none; }
-    .slider-row {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
+    .btn-cam { background: #2563eb; }
+    .btn-capture { background: #e11d48; }
+    .slider-box {
       background: #1e293b;
-      padding: 8px 12px;
+      padding: 10px;
       border-radius: 8px;
-      font-size: 0.85rem;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 0.8rem;
     }
-    input[type="range"] { flex: 1; margin: 0 10px; }
+    input[type="range"] { flex: 1; }
+    #templatePreview {
+      width: 44px;
+      height: 44px;
+      border: 2px solid #38bdf8;
+      border-radius: 50%;
+      margin: 6px auto;
+      display: none;
+      background: #000;
+      object-fit: cover;
+    }
   </style>
-  <script async src="https://docs.opencv.org/4.8.0/opencv.js" onload="onOpenCvReady();"></script>
+  <script async src="https://docs.opencv.org/4.8.0/opencv.js" onload="initOpenCv();"></script>
 </head>
 <body>
 
-  <h2>LoL Minimap Dedektörü</h2>
-  <div id="status" class="status-badge">Sistem Hazırlanıyor...</div>
+  <h3>LoL Radar v3 (Görsel Sabitleyici)</h3>
 
-  <div class="video-container">
-    <video id="videoInput" playsinline autoplay muted></video>
-    <div class="target-box" id="targetBox"></div>
+  <div class="hud">
+    <span id="sysStatus">OpenCV Yükleniyor...</span>
+    <span class="score-box">Mevcut Benzerlik: <span id="currentScore">%0</span></span>
   </div>
 
-  <div class="controls">
-    <button id="startCamBtn" disabled onclick="startCamera()">1. Kamerayı Başlat</button>
-    
-    <label class="file-btn">
-      2. Şampiyon İkonunu Seç (.png)
-      <input type="file" id="templateInput" accept="image/*" onchange="loadTemplate(event)">
-    </label>
+  <div class="stage">
+    <video id="webcam" playsinline autoplay muted></video>
+    <canvas id="overlayCanvas"></canvas>
+  </div>
 
-    <div class="slider-row">
-      <span>Eşik Değeri:</span>
-      <input type="range" id="threshold" min="0.55" max="0.90" step="0.02" value="0.70">
-      <span id="threshVal">0.70</span>
+  <canvas id="cropCanvas" style="display:none;"></canvas>
+  <img id="templatePreview" alt="Hedef İkon">
+
+  <div class="actions">
+    <button class="btn-cam" id="btnCam" disabled onclick="startCam()">1. Kamerayı Başlat</button>
+    <button class="btn-capture" id="btnCap" disabled onclick="captureTargetFromScreen()">2. Ortadaki Karakteri Hedef Olarak Al</button>
+
+    <div class="slider-box">
+      <span>Tetikleme Eşiği:</span>
+      <input type="range" id="threshold" min="0.50" max="0.85" step="0.02" value="0.62">
+      <span id="threshLabel">%62</span>
     </div>
   </div>
 
-  <canvas id="hiddenCanvas" style="display:none;"></canvas>
-
   <script>
     let cvReady = false;
-    let baseTemplateMat = null;
-    let templateScales = [];
-    let isProcessing = false;
-    let lastAlertTime = 0;
-    const alertCooldown = 4000; // Alarm bittikten sonraki bekleme süresi
+    let templateEdges = null;
+    let isTracking = false;
+    let lastAlert = 0;
 
-    const statusEl = document.getElementById('status');
-    const video = document.getElementById('videoInput');
-    const canvas = document.getElementById('hiddenCanvas');
+    const video = document.getElementById('webcam');
+    const overlay = document.getElementById('overlayCanvas');
+    const cropCanvas = document.getElementById('cropCanvas');
+    const preview = document.getElementById('templatePreview');
+    const sysStatus = document.getElementById('sysStatus');
+    const scoreLabel = document.getElementById('currentScore');
     const threshSlider = document.getElementById('threshold');
-    const threshVal = document.getElementById('threshVal');
+    const threshLabel = document.getElementById('threshLabel');
 
-    threshSlider.oninput = () => { threshVal.innerText = threshSlider.value; };
+    threshSlider.oninput = () => {
+      threshLabel.innerText = `%${Math.round(threshSlider.value * 100)}`;
+    };
 
-    function onOpenCvReady() {
+    function initOpenCv() {
       cvReady = true;
-      statusEl.innerText = "Sistem Hazır. Kamerayı başlatın.";
-      document.getElementById('startCamBtn').disabled = false;
+      sysStatus.innerText = "Sistem Hazır";
+      document.getElementById('btnCam').disabled = false;
     }
 
-    async function startCamera() {
+    async function startCam() {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
-          video: {
-            facingMode: { ideal: "environment" },
-            width: { ideal: 1280 },
-            height: { ideal: 720 }
-          },
-          audio: false
+          video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } }
         });
         video.srcObject = stream;
         video.play();
-        statusEl.innerText = "Kamera aktif. Şampiyon ikonu yükleyin.";
-      } catch (err) {
-        alert("Kamera izni alınamadı: " + err.message);
+        video.onloadedmetadata = () => {
+          overlay.width = video.videoWidth;
+          overlay.height = video.videoHeight;
+          document.getElementById('btnCap').disabled = false;
+          sysStatus.innerText = "Kamera Aktif";
+          requestAnimationFrame(renderLoop);
+        };
+      } catch (e) {
+        alert("Kamera izni hatası: " + e.message);
       }
     }
 
-    function clearScales() {
-      templateScales.forEach(mat => mat.delete());
-      templateScales = [];
-    }
-
-    // İkonu yükle ve algılamayı güçlendirmek için 3 farklı ölçeğini oluştur
-    function loadTemplate(event) {
-      const file = event.target.files[0];
-      if (!file) return;
-
-      const img = new Image();
-      img.onload = () => {
-        const tCanvas = document.createElement('canvas');
-        tCanvas.width = img.width;
-        tCanvas.height = img.height;
-        const ctx = tCanvas.getContext('2d');
-        ctx.drawImage(img, 0, 0);
-
-        if (baseTemplateMat) baseTemplateMat.delete();
-        clearScales();
-
-        const src = cv.imread(tCanvas);
-        baseTemplateMat = new cv.Mat();
-        cv.cvtColor(src, baseTemplateMat, cv.COLOR_RGBA2GRAY);
-        src.delete();
-
-        // 3 farklı boyutta şablon hazırla (%85, %100, %115) - kamera mesafesi farklarını yutar
-        const scales = [0.85, 1.0, 1.15];
-        scales.forEach(s => {
-          let scaled = new cv.Mat();
-          let dsize = new cv.Size(Math.round(baseTemplateMat.cols * s), Math.round(baseTemplateMat.rows * s));
-          cv.resize(baseTemplateMat, scaled, dsize, 0, 0, cv.INTER_AREA);
-          templateScales.push(scaled);
-        });
-
-        statusEl.innerText = "İkon optimize edildi! Harita taranıyor...";
-        if (!isProcessing) {
-          isProcessing = true;
-          requestAnimationFrame(processFrame);
-        }
-      };
-      img.src = URL.createObjectURL(file);
-    }
-
-    function processFrame() {
-      if (!isProcessing || templateScales.length === 0 || video.readyState !== 4) {
-        requestAnimationFrame(processFrame);
-        return;
-      }
-
+    // Ortadaki kılavuzdan şampiyonu tam kamera çözünürlüğünde kırpıp şablon yapar
+    function captureTargetFromScreen() {
       const vw = video.videoWidth;
       const vh = video.videoHeight;
-      canvas.width = vw;
-      canvas.height = vh;
-      const ctx = canvas.getContext('2d', { willReadFrequently: true });
-      ctx.drawImage(video, 0, 0, vw, vh);
+      const boxSize = 54; // Minimap şampiyon ikonu boyutu
+      const sx = Math.floor((vw - boxSize) / 2);
+      const sy = Math.floor((vh - boxSize) / 2);
 
-      const roiSize = Math.floor(Math.min(vw, vh) * 0.50);
-      const startX = Math.floor((vw - roiSize) / 2);
-      const startY = Math.floor((vh - roiSize) / 2);
+      cropCanvas.width = boxSize;
+      cropCanvas.height = boxSize;
+      const ctx = cropCanvas.getContext('2d');
+      ctx.drawImage(video, sx, sy, boxSize, boxSize, 0, 0, boxSize, boxSize);
 
-      let src = cv.imread(canvas);
-      let rect = new cv.Rect(startX, startY, roiSize, roiSize);
-      let roi = src.roi(rect);
+      preview.src = cropCanvas.toDataURL();
+      preview.style.display = "block";
 
-      let grayRoi = new cv.Mat();
-      cv.cvtColor(roi, grayRoi, cv.COLOR_RGBA2GRAY);
+      if (templateEdges) templateEdges.delete();
 
-      let highestScore = 0;
+      let src = cv.imread(cropCanvas);
+      let gray = new cv.Mat();
+      cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
 
-      // 3 boyuttan hangisi en yüksek puanı veriyorsa onu al
-      for (let tMat of templateScales) {
-        if (grayRoi.cols >= tMat.cols && grayRoi.rows >= tMat.rows) {
+      // Canny Edge ile parlama ve renk farklarını sıfırlıyoruz
+      templateEdges = new cv.Mat();
+      cv.Canny(gray, templateEdges, 50, 150);
+
+      src.delete();
+      gray.delete();
+
+      isTracking = true;
+      sysStatus.innerText = "Hedef Kilitlendi! Taranıyor...";
+    }
+
+    function renderLoop() {
+      if (video.readyState === 4) {
+        const vw = video.videoWidth;
+        const vh = video.videoHeight;
+        const ctx = overlay.getContext('2d');
+        ctx.clearRect(0, 0, vw, vh);
+
+        // 1. Ekranın tam ortasındaki Kırpma / Nişan dairesi
+        const centerSize = 54;
+        const cx = (vw - centerSize) / 2;
+        const cy = (vh - centerSize) / 2;
+
+        ctx.strokeStyle = "#38bdf8";
+        ctx.lineWidth = 2;
+        ctx.strokeRect(cx, cy, centerSize, centerSize);
+
+        // 2. Eğer hedef tanımlandıysa tüm ekranda Canny Edge ile ara
+        if (isTracking && templateEdges) {
+          cropCanvas.width = vw;
+          cropCanvas.height = vh;
+          const cCtx = cropCanvas.getContext('2d', { willReadFrequently: true });
+          cCtx.drawImage(video, 0, 0, vw, vh);
+
+          let frame = cv.imread(cropCanvas);
+          let grayFrame = new cv.Mat();
+          cv.cvtColor(frame, grayFrame, cv.COLOR_RGBA2GRAY);
+
+          let frameEdges = new cv.Mat();
+          cv.Canny(grayFrame, frameEdges, 50, 150);
+
           let result = new cv.Mat();
-          cv.matchTemplate(grayRoi, tMat, result, cv.TM_CCOEFF_NORMED);
+          cv.matchTemplate(frameEdges, templateEdges, result, cv.TM_CCOEFF_NORMED);
+
           let minMax = cv.minMaxLoc(result);
-          if (minMax.maxVal > highestScore) {
-            highestScore = minMax.maxVal;
+          let matchScore = minMax.maxVal > 0 ? minMax.maxVal : 0;
+          scoreLabel.innerText = `%${Math.round(matchScore * 100)}`;
+
+          const threshold = parseFloat(threshSlider.value);
+
+          // Eşik aşıldıysa yeşil kutu çiz ve alarm çal
+          if (matchScore >= threshold) {
+            ctx.strokeStyle = "#22c55e";
+            ctx.lineWidth = 4;
+            ctx.strokeRect(minMax.maxLoc.x, minMax.maxLoc.y, templateEdges.cols, templateEdges.rows);
+
+            const now = Date.now();
+            if (now - lastAlert > 3500) {
+              soundEmergencyAlarm();
+              lastAlert = now;
+            }
           }
+
+          frame.delete();
+          grayFrame.delete();
+          frameEdges.delete();
           result.delete();
         }
       }
-
-      const currentThresh = parseFloat(threshSlider.value);
-      const now = Date.now();
-
-      if (highestScore >= currentThresh && (now - lastAlertTime > alertCooldown)) {
-        triggerAlert(highestScore);
-        lastAlertTime = now;
-      }
-
-      src.delete();
-      roi.delete();
-      grayRoi.delete();
-
-      setTimeout(() => {
-        requestAnimationFrame(processFrame);
-      }, 80);
+      setTimeout(() => requestAnimationFrame(renderLoop), 70);
     }
 
-    // 2 saniye boyunca kesintisiz çalan yüksek tempolu acil durum uyarısı
-    function playBeepAlarm() {
+    // 2 saniyelik net alarm
+    function soundEmergencyAlarm() {
       const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-      
-      // 2 saniye içinde 6 adet seri bip sesi
-      const beeps = [0, 0.3, 0.6, 0.9, 1.2, 1.5, 1.8];
-      
-      beeps.forEach(startTime => {
+      const beeps = [0, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5];
+
+      beeps.forEach(t => {
         const osc = audioCtx.createOscillator();
         const gain = audioCtx.createGain();
+        osc.type = "sawtooth";
+        osc.frequency.setValueAtTime(950, audioCtx.currentTime + t);
 
-        osc.type = "square"; // Keskin ve duyulması kolay alarm tonu
-        osc.frequency.setValueAtTime(1050, audioCtx.currentTime + startTime);
-
-        gain.gain.setValueAtTime(0.8, audioCtx.currentTime + startTime);
-        gain.gain.setValueAtTime(0, audioCtx.currentTime + startTime + 0.15); // Her bip 150ms sürer
+        gain.gain.setValueAtTime(0.7, audioCtx.currentTime + t);
+        gain.gain.setValueAtTime(0.01, audioCtx.currentTime + t + 0.12);
 
         osc.connect(gain);
         gain.connect(audioCtx.destination);
 
-        osc.start(audioCtx.currentTime + startTime);
-        osc.stop(audioCtx.currentTime + startTime + 0.16);
+        osc.start(audioCtx.currentTime + t);
+        osc.stop(audioCtx.currentTime + t + 0.13);
       });
-    }
-
-    function triggerAlert(score) {
-      playBeepAlarm();
-      statusEl.classList.add('status-alert');
-      statusEl.innerText = `ALARM! KARAKTER BELİRDİ! (%${Math.round(score * 100)})`;
-      
-      setTimeout(() => {
-        statusEl.classList.remove('status-alert');
-        statusEl.innerText = "Harita taranıyor...";
-      }, 2100);
     }
   </script>
 </body>
