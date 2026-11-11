@@ -30,8 +30,8 @@
       top: 50%;
       left: 50%;
       transform: translate(-50%, -50%);
-      width: 180px;
-      height: 180px;
+      width: 190px;
+      height: 190px;
       border: 3px dashed #ef4444;
       border-radius: 8px;
       pointer-events: none;
@@ -47,7 +47,7 @@
     }
     .status-alert {
       background: #dc2626 !important;
-      animation: pulse 0.5s infinite alternate;
+      animation: pulse 0.25s infinite alternate;
     }
     @keyframes pulse {
       from { transform: scale(1); }
@@ -88,7 +88,7 @@
 <body>
 
   <h2>LoL Minimap Dedektörü</h2>
-  <div id="status" class="status-badge">Sistem Yükleniyor...</div>
+  <div id="status" class="status-badge">Sistem Hazırlanıyor...</div>
 
   <div class="video-container">
     <video id="videoInput" playsinline autoplay muted></video>
@@ -104,9 +104,9 @@
     </label>
 
     <div class="slider-row">
-      <span>Hassasiyet:</span>
-      <input type="range" id="threshold" min="0.60" max="0.95" step="0.02" value="0.78">
-      <span id="threshVal">0.78</span>
+      <span>Eşik Değeri:</span>
+      <input type="range" id="threshold" min="0.55" max="0.90" step="0.02" value="0.70">
+      <span id="threshVal">0.70</span>
     </div>
   </div>
 
@@ -114,10 +114,11 @@
 
   <script>
     let cvReady = false;
-    let templateMat = null;
+    let baseTemplateMat = null;
+    let templateScales = [];
     let isProcessing = false;
     let lastAlertTime = 0;
-    const alertCooldown = 5000;
+    const alertCooldown = 4000; // Alarm bittikten sonraki bekleme süresi
 
     const statusEl = document.getElementById('status');
     const video = document.getElementById('videoInput');
@@ -151,6 +152,12 @@
       }
     }
 
+    function clearScales() {
+      templateScales.forEach(mat => mat.delete());
+      templateScales = [];
+    }
+
+    // İkonu yükle ve algılamayı güçlendirmek için 3 farklı ölçeğini oluştur
     function loadTemplate(event) {
       const file = event.target.files[0];
       if (!file) return;
@@ -163,13 +170,24 @@
         const ctx = tCanvas.getContext('2d');
         ctx.drawImage(img, 0, 0);
 
-        if (templateMat) templateMat.delete();
+        if (baseTemplateMat) baseTemplateMat.delete();
+        clearScales();
+
         const src = cv.imread(tCanvas);
-        templateMat = new cv.Mat();
-        cv.cvtColor(src, templateMat, cv.COLOR_RGBA2GRAY);
+        baseTemplateMat = new cv.Mat();
+        cv.cvtColor(src, baseTemplateMat, cv.COLOR_RGBA2GRAY);
         src.delete();
 
-        statusEl.innerText = "İkon yüklendi! Harita taranıyor...";
+        // 3 farklı boyutta şablon hazırla (%85, %100, %115) - kamera mesafesi farklarını yutar
+        const scales = [0.85, 1.0, 1.15];
+        scales.forEach(s => {
+          let scaled = new cv.Mat();
+          let dsize = new cv.Size(Math.round(baseTemplateMat.cols * s), Math.round(baseTemplateMat.rows * s));
+          cv.resize(baseTemplateMat, scaled, dsize, 0, 0, cv.INTER_AREA);
+          templateScales.push(scaled);
+        });
+
+        statusEl.innerText = "İkon optimize edildi! Harita taranıyor...";
         if (!isProcessing) {
           isProcessing = true;
           requestAnimationFrame(processFrame);
@@ -179,7 +197,7 @@
     }
 
     function processFrame() {
-      if (!isProcessing || !templateMat || video.readyState !== 4) {
+      if (!isProcessing || templateScales.length === 0 || video.readyState !== 4) {
         requestAnimationFrame(processFrame);
         return;
       }
@@ -191,7 +209,7 @@
       const ctx = canvas.getContext('2d', { willReadFrequently: true });
       ctx.drawImage(video, 0, 0, vw, vh);
 
-      const roiSize = Math.floor(Math.min(vw, vh) * 0.45);
+      const roiSize = Math.floor(Math.min(vw, vh) * 0.50);
       const startX = Math.floor((vw - roiSize) / 2);
       const startY = Math.floor((vh - roiSize) / 2);
 
@@ -202,57 +220,72 @@
       let grayRoi = new cv.Mat();
       cv.cvtColor(roi, grayRoi, cv.COLOR_RGBA2GRAY);
 
-      let result = new cv.Mat();
-      cv.matchTemplate(grayRoi, templateMat, result, cv.TM_CCOEFF_NORMED);
+      let highestScore = 0;
 
-      let minMax = cv.minMaxLoc(result);
-      let maxVal = minMax.maxVal;
+      // 3 boyuttan hangisi en yüksek puanı veriyorsa onu al
+      for (let tMat of templateScales) {
+        if (grayRoi.cols >= tMat.cols && grayRoi.rows >= tMat.rows) {
+          let result = new cv.Mat();
+          cv.matchTemplate(grayRoi, tMat, result, cv.TM_CCOEFF_NORMED);
+          let minMax = cv.minMaxLoc(result);
+          if (minMax.maxVal > highestScore) {
+            highestScore = minMax.maxVal;
+          }
+          result.delete();
+        }
+      }
+
       const currentThresh = parseFloat(threshSlider.value);
-
       const now = Date.now();
-      if (maxVal >= currentThresh && (now - lastAlertTime > alertCooldown)) {
-        triggerAlert(maxVal);
+
+      if (highestScore >= currentThresh && (now - lastAlertTime > alertCooldown)) {
+        triggerAlert(highestScore);
         lastAlertTime = now;
       }
 
       src.delete();
       roi.delete();
       grayRoi.delete();
-      result.delete();
 
       setTimeout(() => {
         requestAnimationFrame(processFrame);
-      }, 70);
+      }, 80);
     }
 
-    function playBeep() {
+    // 2 saniye boyunca kesintisiz çalan yüksek tempolu acil durum uyarısı
+    function playBeepAlarm() {
       const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-      const osc = audioCtx.createOscillator();
-      const gain = audioCtx.createGain();
+      
+      // 2 saniye içinde 6 adet seri bip sesi
+      const beeps = [0, 0.3, 0.6, 0.9, 1.2, 1.5, 1.8];
+      
+      beeps.forEach(startTime => {
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
 
-      osc.type = "sine";
-      osc.frequency.setValueAtTime(880, audioCtx.currentTime);
-      osc.frequency.exponentialRampToValueAtTime(440, audioCtx.currentTime + 0.35);
+        osc.type = "square"; // Keskin ve duyulması kolay alarm tonu
+        osc.frequency.setValueAtTime(1050, audioCtx.currentTime + startTime);
 
-      gain.gain.setValueAtTime(1, audioCtx.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.35);
+        gain.gain.setValueAtTime(0.8, audioCtx.currentTime + startTime);
+        gain.gain.setValueAtTime(0, audioCtx.currentTime + startTime + 0.15); // Her bip 150ms sürer
 
-      osc.connect(gain);
-      gain.connect(audioCtx.destination);
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
 
-      osc.start();
-      osc.stop(audioCtx.currentTime + 0.4);
+        osc.start(audioCtx.currentTime + startTime);
+        osc.stop(audioCtx.currentTime + startTime + 0.16);
+      });
     }
 
     function triggerAlert(score) {
-      playBeep();
+      playBeepAlarm();
       statusEl.classList.add('status-alert');
-      statusEl.innerText = `DİKKAT! ŞAMPİYON GÖRÜNDÜ (%${Math.round(score * 100)})`;
+      statusEl.innerText = `ALARM! KARAKTER BELİRDİ! (%${Math.round(score * 100)})`;
       
       setTimeout(() => {
         statusEl.classList.remove('status-alert');
-        statusEl.innerText = "Taranıyor...";
-      }, 2000);
+        statusEl.innerText = "Harita taranıyor...";
+      }, 2100);
     }
   </script>
 </body>
