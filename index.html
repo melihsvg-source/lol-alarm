@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-  <title>Master Yi Radar v5</title>
+  <title>Master Yi Radar v6</title>
   <style>
     * { box-sizing: border-box; }
     body {
@@ -73,6 +73,17 @@
       font-size: 0.85rem;
     }
     input[type="range"] { flex: 1; }
+    .num-input {
+      width: 65px;
+      padding: 6px;
+      background: #0f172a;
+      border: 1px solid #38bdf8;
+      border-radius: 6px;
+      color: #38bdf8;
+      font-weight: bold;
+      text-align: center;
+      font-size: 0.9rem;
+    }
     #templatePreview {
       width: 48px;
       height: 48px;
@@ -88,11 +99,11 @@
 </head>
 <body>
 
-  <h3>Master Yi Radar (Hassas Tetikleme)</h3>
+  <h3>Master Yi Radar (Manuel Eşik Kontrolü)</h3>
 
   <div class="hud">
     <span id="sysStatus">OpenCV Yükleniyor...</span>
-    <span class="score-box">Eşleşme: <span id="currentScore">%0</span></span>
+    <span class="score-box">Anlık Benzerlik: <span id="currentScore">%0.0</span></span>
   </div>
 
   <div class="stage">
@@ -108,9 +119,9 @@
     <button class="btn-capture" id="btnCap" disabled onclick="captureYi()">2. Ortadaki Yi'yi Kilitle</button>
 
     <div class="slider-box">
-      <span>Tetikleme Eşiği:</span>
-      <input type="range" id="threshold" min="0.85" max="0.99" step="0.01" value="0.96">
-      <span id="threshLabel">%96</span>
+      <span>Eşik (%):</span>
+      <input type="range" id="threshold" min="80.0" max="99.9" step="0.1" value="97.0">
+      <input type="number" id="thresholdNum" class="num-input" min="80.0" max="99.9" step="0.1" value="97.0">
     </div>
   </div>
 
@@ -128,10 +139,19 @@
     const sysStatus = document.getElementById('sysStatus');
     const scoreLabel = document.getElementById('currentScore');
     const threshSlider = document.getElementById('threshold');
-    const threshLabel = document.getElementById('threshLabel');
+    const threshNum = document.getElementById('thresholdNum');
 
+    // Slider değişince kutuyu güncelle
     threshSlider.oninput = () => {
-      threshLabel.innerText = `%${Math.round(threshSlider.value * 100)}`;
+      threshNum.value = parseFloat(threshSlider.value).toFixed(1);
+    };
+
+    // Kutudan elle yazılınca slider'ı güncelle
+    threshNum.oninput = () => {
+      let val = parseFloat(threshNum.value);
+      if (!isNaN(val)) {
+        threshSlider.value = val;
+      }
     };
 
     function initOpenCv() {
@@ -173,122 +193,4 @@
 
       cropCanvas.width = boxSize;
       cropCanvas.height = boxSize;
-      const ctx = cropCanvas.getContext('2d');
-      ctx.drawImage(video, sx, sy, boxSize, boxSize, 0, 0, boxSize, boxSize);
-
-      preview.src = cropCanvas.toDataURL();
-      preview.style.display = "block";
-
-      if (baseTemplate) baseTemplate.delete();
-      clearTemplates();
-
-      let src = cv.imread(cropCanvas);
-      baseTemplate = new cv.Mat();
-      cv.cvtColor(src, baseTemplate, cv.COLOR_RGBA2GRAY);
-
-      const scales = [0.93, 1.0, 1.07];
-      scales.forEach(s => {
-        let tpl = new cv.Mat();
-        let dsize = new cv.Size(Math.round(boxSize * s), Math.round(boxSize * s));
-        cv.resize(baseTemplate, tpl, dsize, 0, 0, cv.INTER_AREA);
-        scaledTemplates.push(tpl);
-      });
-
-      src.delete();
-      isTracking = true;
-      sysStatus.innerText = "Yi Kilitlendi! Taranıyor...";
-    }
-
-    function renderLoop() {
-      if (video.readyState === 4) {
-        const vw = video.videoWidth;
-        const vh = video.videoHeight;
-        const ctx = overlay.getContext('2d');
-        ctx.clearRect(0, 0, vw, vh);
-
-        const centerSize = 50;
-        const cx = vw / 2;
-        const cy = vh / 2;
-
-        ctx.strokeStyle = "#fbbf24";
-        ctx.lineWidth = 2;
-        ctx.strokeRect(cx - centerSize / 2, cy - centerSize / 2, centerSize, centerSize);
-
-        if (isTracking && scaledTemplates.length > 0) {
-          cropCanvas.width = vw;
-          cropCanvas.height = vh;
-          const cCtx = cropCanvas.getContext('2d', { willReadFrequently: true });
-          cCtx.drawImage(video, 0, 0, vw, vh);
-
-          let frame = cv.imread(cropCanvas);
-          let grayFrame = new cv.Mat();
-          cv.cvtColor(frame, grayFrame, cv.COLOR_RGBA2GRAY);
-
-          let bestVal = -1;
-          let bestLoc = null;
-          let bestSize = null;
-
-          for (let tpl of scaledTemplates) {
-            if (grayFrame.cols >= tpl.cols && grayFrame.rows >= tpl.rows) {
-              let result = new cv.Mat();
-              cv.matchTemplate(grayFrame, tpl, result, cv.TM_CCOEFF_NORMED);
-              let minMax = cv.minMaxLoc(result);
-              if (minMax.maxVal > bestVal) {
-                bestVal = minMax.maxVal;
-                bestLoc = minMax.maxLoc;
-                bestSize = { w: tpl.cols, h: tpl.rows };
-              }
-              result.delete();
-            }
-          }
-
-          let displayScore = Math.max(0, bestVal);
-          scoreLabel.innerText = `%${Math.round(displayScore * 100)}`;
-          const threshold = parseFloat(threshSlider.value);
-
-          // Sadece %96 veya belirlediğin eşiğin üstüne çıkınca öter ve kutu çizer
-          if (bestVal >= threshold && bestLoc) {
-            ctx.strokeStyle = "#ef4444";
-            ctx.lineWidth = 4;
-            ctx.strokeRect(bestLoc.x, bestLoc.y, bestSize.w, bestSize.h);
-
-            if (!isAlarmPlaying) {
-              playAlert();
-            }
-          }
-
-          frame.delete();
-          grayFrame.delete();
-        }
-      }
-      setTimeout(() => requestAnimationFrame(renderLoop), 80);
-    }
-
-    function playAlert() {
-      isAlarmPlaying = true;
-      const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-      const beeps = [0, 0.2, 0.4, 0.6, 0.8, 1.0];
-
-      beeps.forEach(t => {
-        const osc = audioCtx.createOscillator();
-        const gain = audioCtx.createGain();
-        osc.type = "sawtooth";
-        osc.frequency.setValueAtTime(1150, audioCtx.currentTime + t);
-
-        gain.gain.setValueAtTime(0.7, audioCtx.currentTime + t);
-        gain.gain.setValueAtTime(0.01, audioCtx.currentTime + t + 0.12);
-
-        osc.connect(gain);
-        gain.connect(audioCtx.destination);
-
-        osc.start(audioCtx.currentTime + t);
-        osc.stop(audioCtx.currentTime + t + 0.13);
-      });
-
-      setTimeout(() => {
-        isAlarmPlaying = false;
-      }, 1500);
-    }
-  </script>
-</body>
-</html>
+      const ctx
