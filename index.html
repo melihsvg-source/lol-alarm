@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-  <title>Master Yi Minimap Dedektörü</title>
+  <title>Master Yi Radar v4</title>
   <style>
     * { box-sizing: border-box; }
     body {
@@ -88,7 +88,7 @@
 </head>
 <body>
 
-  <h3>Master Yi Radar (Maskeli Takip)</h3>
+  <h3>Master Yi Radar (Sahte Alarm Filtresi)</h3>
 
   <div class="hud">
     <span id="sysStatus">OpenCV Yükleniyor...</span>
@@ -105,22 +105,21 @@
 
   <div class="actions">
     <button class="btn-cam" id="btnCam" disabled onclick="startCam()">1. Kamerayı Başlat</button>
-    <button class="btn-capture" id="btnCap" disabled onclick="captureYi()">2. Ortadaki Yi'yi Kilitle (Daire)</button>
+    <button class="btn-capture" id="btnCap" disabled onclick="captureYi()">2. Ortadaki Yi'yi Kilitle</button>
 
     <div class="slider-box">
       <span>Tetikleme Eşiği:</span>
-      <input type="range" id="threshold" min="0.55" max="0.85" step="0.02" value="0.65">
-      <span id="threshLabel">%65</span>
+      <input type="range" id="threshold" min="0.55" max="0.88" step="0.02" value="0.72">
+      <span id="threshLabel">%72</span>
     </div>
   </div>
 
   <script>
     let cvReady = false;
     let baseTemplate = null;
-    let baseMask = null;
     let scaledTemplates = [];
     let isTracking = false;
-    let lastAlert = 0;
+    let isAlarmPlaying = false;
 
     const video = document.getElementById('webcam');
     const overlay = document.getElementById('overlayCanvas');
@@ -161,18 +160,14 @@
     }
 
     function clearTemplates() {
-      scaledTemplates.forEach(item => {
-        item.tpl.delete();
-        item.msk.delete();
-      });
+      scaledTemplates.forEach(t => t.delete());
       scaledTemplates = [];
     }
 
-    // Yi'yi çekerken dışındaki köşeleri tamamen silip sadece yuvarlak daireyi maske yapıyoruz
     function captureYi() {
       const vw = video.videoWidth;
       const vh = video.videoHeight;
-      const boxSize = 52; // Yi'nin minimap portre çapı
+      const boxSize = 50; 
       const sx = Math.floor((vw - boxSize) / 2);
       const sy = Math.floor((vh - boxSize) / 2);
 
@@ -185,27 +180,19 @@
       preview.style.display = "block";
 
       if (baseTemplate) baseTemplate.delete();
-      if (baseMask) baseMask.delete();
       clearTemplates();
 
       let src = cv.imread(cropCanvas);
       baseTemplate = new cv.Mat();
       cv.cvtColor(src, baseTemplate, cv.COLOR_RGBA2GRAY);
 
-      // Zemin yeşilliğini/nehir dokusunu yoksaymak için yuvarlak maske oluştur
-      baseMask = new cv.Mat.zeros(boxSize, boxSize, cv.CV_8UC1);
-      let center = new cv.Point(boxSize / 2, boxSize / 2);
-      cv.circle(baseMask, center, Math.floor(boxSize / 2) - 2, new cv.Scalar(255), -1);
-
-      // Farklı mesafeler için 3 ölçek hazırla
-      const scales = [0.90, 1.0, 1.10];
+      // Farklı mesafeler için 3 ölçek
+      const scales = [0.92, 1.0, 1.08];
       scales.forEach(s => {
         let tpl = new cv.Mat();
-        let msk = new cv.Mat();
         let dsize = new cv.Size(Math.round(boxSize * s), Math.round(boxSize * s));
-        cv.resize(baseTemplate, tpl, dsize, 0, 0, cv.INTER_LINEAR);
-        cv.resize(baseMask, msk, dsize, 0, 0, cv.INTER_NEAREST);
-        scaledTemplates.push({ tpl, msk, w: dsize.width, h: dsize.height });
+        cv.resize(baseTemplate, tpl, dsize, 0, 0, cv.INTER_AREA);
+        scaledTemplates.push(tpl);
       });
 
       src.delete();
@@ -220,16 +207,14 @@
         const ctx = overlay.getContext('2d');
         ctx.clearRect(0, 0, vw, vh);
 
-        // Ortadaki hedef dairesi
-        const centerSize = 52;
+        // Ortadaki nişan halkası
+        const centerSize = 50;
         const cx = vw / 2;
         const cy = vh / 2;
 
         ctx.strokeStyle = "#fbbf24";
         ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.arc(cx, cy, centerSize / 2, 0, 2 * Math.PI);
-        ctx.stroke();
+        ctx.strokeRect(cx - centerSize / 2, cy - centerSize / 2, centerSize, centerSize);
 
         if (isTracking && scaledTemplates.length > 0) {
           cropCanvas.width = vw;
@@ -241,39 +226,38 @@
           let grayFrame = new cv.Mat();
           cv.cvtColor(frame, grayFrame, cv.COLOR_RGBA2GRAY);
 
-          let bestVal = 0;
+          let bestVal = -1;
           let bestLoc = null;
           let bestSize = null;
 
-          // Maskeli eşleme döngüsü (Arka plan dokusunu sıfırlayarak sadece yüzü arar)
-          for (let item of scaledTemplates) {
-            if (grayFrame.cols >= item.w && grayFrame.rows >= item.h) {
+          // TM_CCOEFF_NORMED: Beyaz parlamaları ve sahte eşleşmeleri eler (-1 ile +1 arası değer verir)
+          for (let tpl of scaledTemplates) {
+            if (grayFrame.cols >= tpl.cols && grayFrame.rows >= tpl.rows) {
               let result = new cv.Mat();
-              // cv.TM_CCORR_NORMED maske desteği olan en stabil metriktir
-              cv.matchTemplate(grayFrame, item.tpl, result, cv.TM_CCORR_NORMED, item.msk);
+              cv.matchTemplate(grayFrame, tpl, result, cv.TM_CCOEFF_NORMED);
               let minMax = cv.minMaxLoc(result);
               if (minMax.maxVal > bestVal) {
                 bestVal = minMax.maxVal;
                 bestLoc = minMax.maxLoc;
-                bestSize = { w: item.w, h: item.h };
+                bestSize = { w: tpl.cols, h: tpl.rows };
               }
               result.delete();
             }
           }
 
-          scoreLabel.innerText = `%${Math.round(bestVal * 100)}`;
+          // Negatif değerleri sıfıra çek
+          let displayScore = Math.max(0, bestVal);
+          scoreLabel.innerText = `%${Math.round(displayScore * 100)}`;
           const threshold = parseFloat(threshSlider.value);
 
-          // Eşik aşıldığında Yi'nin etrafını sarı kareye al ve ötmeye başla
+          // EĞER GERÇEKTEN Yİ VARSA: Kırmızı kutu çiz ve alarmı tetikle
           if (bestVal >= threshold && bestLoc) {
             ctx.strokeStyle = "#ef4444";
             ctx.lineWidth = 4;
             ctx.strokeRect(bestLoc.x, bestLoc.y, bestSize.w, bestSize.h);
 
-            const now = Date.now();
-            if (now - lastAlert > 3000) {
+            if (!isAlarmPlaying) {
               playAlert();
-              lastAlert = now;
             }
           }
 
@@ -284,9 +268,11 @@
       setTimeout(() => requestAnimationFrame(renderLoop), 80);
     }
 
+    // Alarm çalarken üst üste binmesini engelleyen güvenli tetikleyici
     function playAlert() {
+      isAlarmPlaying = true;
       const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-      const beeps = [0, 0.22, 0.44, 0.66, 0.88, 1.1, 1.32];
+      const beeps = [0, 0.2, 0.4, 0.6, 0.8, 1.0];
 
       beeps.forEach(t => {
         const osc = audioCtx.createOscillator();
@@ -294,7 +280,7 @@
         osc.type = "sawtooth";
         osc.frequency.setValueAtTime(1150, audioCtx.currentTime + t);
 
-        gain.gain.setValueAtTime(0.8, audioCtx.currentTime + t);
+        gain.gain.setValueAtTime(0.7, audioCtx.currentTime + t);
         gain.gain.setValueAtTime(0.01, audioCtx.currentTime + t + 0.12);
 
         osc.connect(gain);
@@ -303,6 +289,11 @@
         osc.start(audioCtx.currentTime + t);
         osc.stop(audioCtx.currentTime + t + 0.13);
       });
+
+      // 1.5 saniye sonra yeni alarm çalabilmesi için kilidi aç
+      setTimeout(() => {
+        isAlarmPlaying = false;
+      }, 1500);
     }
   </script>
 </body>
