@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-  <title>Master Yi Radar v4</title>
+  <title>Master Yi Radar v5</title>
   <style>
     * { box-sizing: border-box; }
     body {
@@ -70,7 +70,7 @@
       display: flex;
       align-items: center;
       gap: 10px;
-      font-size: 0.8rem;
+      font-size: 0.85rem;
     }
     input[type="range"] { flex: 1; }
     #templatePreview {
@@ -88,7 +88,7 @@
 </head>
 <body>
 
-  <h3>Master Yi Radar (Sahte Alarm Filtresi)</h3>
+  <h3>Master Yi Radar (Hassas Tetikleme)</h3>
 
   <div class="hud">
     <span id="sysStatus">OpenCV Yükleniyor...</span>
@@ -109,8 +109,8 @@
 
     <div class="slider-box">
       <span>Tetikleme Eşiği:</span>
-      <input type="range" id="threshold" min="0.55" max="0.88" step="0.02" value="0.72">
-      <span id="threshLabel">%72</span>
+      <input type="range" id="threshold" min="0.85" max="0.99" step="0.01" value="0.96">
+      <span id="threshLabel">%96</span>
     </div>
   </div>
 
@@ -186,8 +186,7 @@
       baseTemplate = new cv.Mat();
       cv.cvtColor(src, baseTemplate, cv.COLOR_RGBA2GRAY);
 
-      // Farklı mesafeler için 3 ölçek
-      const scales = [0.92, 1.0, 1.08];
+      const scales = [0.93, 1.0, 1.07];
       scales.forEach(s => {
         let tpl = new cv.Mat();
         let dsize = new cv.Size(Math.round(boxSize * s), Math.round(boxSize * s));
@@ -207,7 +206,6 @@
         const ctx = overlay.getContext('2d');
         ctx.clearRect(0, 0, vw, vh);
 
-        // Ortadaki nişan halkası
         const centerSize = 50;
         const cx = vw / 2;
         const cy = vh / 2;
@@ -230,7 +228,6 @@
           let bestLoc = null;
           let bestSize = null;
 
-          // TM_CCOEFF_NORMED: Beyaz parlamaları ve sahte eşleşmeleri eler (-1 ile +1 arası değer verir)
           for (let tpl of scaledTemplates) {
             if (grayFrame.cols >= tpl.cols && grayFrame.rows >= tpl.rows) {
               let result = new cv.Mat();
@@ -245,12 +242,11 @@
             }
           }
 
-          // Negatif değerleri sıfıra çek
           let displayScore = Math.max(0, bestVal);
           scoreLabel.innerText = `%${Math.round(displayScore * 100)}`;
           const threshold = parseFloat(threshSlider.value);
 
-          // EĞER GERÇEKTEN Yİ VARSA: Kırmızı kutu çiz ve alarmı tetikle
+          // Sadece %96 veya belirlediğin eşiğin üstüne çıkınca öter ve kutu çizer
           if (bestVal >= threshold && bestLoc) {
             ctx.strokeStyle = "#ef4444";
             ctx.lineWidth = 4;
@@ -268,7 +264,6 @@
       setTimeout(() => requestAnimationFrame(renderLoop), 80);
     }
 
-    // Alarm çalarken üst üste binmesini engelleyen güvenli tetikleyici
     function playAlert() {
       isAlarmPlaying = true;
       const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -290,7 +285,6 @@
         osc.stop(audioCtx.currentTime + t + 0.13);
       });
 
-      // 1.5 saniye sonra yeni alarm çalabilmesi için kilidi aç
       setTimeout(() => {
         isAlarmPlaying = false;
       }, 1500);
